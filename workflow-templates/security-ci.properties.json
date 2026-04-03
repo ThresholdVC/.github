@@ -1,0 +1,6 @@
+{
+    "name": "Security CI",
+    "description": "CVE audit (pip-audit) + SAST (Semgrep) on every push and PR",
+    "iconName": "octicon shield",
+    "categories": ["Security", "Python"]
+}
