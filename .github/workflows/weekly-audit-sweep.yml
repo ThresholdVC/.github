@@ -1,0 +1,121 @@
+name: Weekly Security Audit Sweep
+
+on:
+  schedule:
+    - cron: '0 14 * * 1'  # Monday 9am ET (2pm UTC)
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  sweep:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Sweep all repos for audit failures
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+        run: |
+          echo "## Security Audit Sweep — $(date -u '+%Y-%m-%d')" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+
+          # All ThresholdVC repos + joshsteinvc repos
+          ORG_REPOS=$(gh api orgs/ThresholdVC/repos --paginate --jq '.[].full_name' 2>/dev/null)
+          USER_REPOS=$(gh api users/joshsteinvc/repos --paginate --jq '.[].full_name' 2>/dev/null)
+          ALL_REPOS="$ORG_REPOS $USER_REPOS"
+
+          FAILING_LIST=""
+          PASSING_LIST=""
+          NO_AUDIT_LIST=""
+
+          for repo in $ALL_REPOS; do
+            # Find security audit workflow
+            WORKFLOW_ID=$(gh api "repos/$repo/actions/workflows" \
+              --jq '.workflows[] | select(.name | test("security.?audit"; "i")) | .id' \
+              2>/dev/null | head -1)
+
+            if [ -z "$WORKFLOW_ID" ]; then
+              NO_AUDIT_LIST="$NO_AUDIT_LIST
+- $repo"
+              continue
+            fi
+
+            # Get last 5 run conclusions
+            CONCLUSIONS=$(gh api "repos/$repo/actions/workflows/$WORKFLOW_ID/runs?per_page=5" \
+              --jq '[.workflow_runs[:5] | .[].conclusion] | join(" ")' 2>/dev/null)
+
+            # Count consecutive failures from newest
+            CONSECUTIVE=0
+            for c in $CONCLUSIONS; do
+              if [ "$c" = "failure" ]; then
+                CONSECUTIVE=$((CONSECUTIVE + 1))
+              else
+                break
+              fi
+            done
+
+            if [ "$CONSECUTIVE" -ge 3 ]; then
+              FAILING_LIST="$FAILING_LIST
+- **$repo** — $CONSECUTIVE consecutive failures"
+
+              # Create issue if none open already
+              OPEN_ISSUE=$(gh api "repos/ThresholdVC/.github/issues" \
+                --jq ".[] | select(.state==\"open\") | select(.title | test(\"$repo\")) | .number" \
+                2>/dev/null | head -1)
+
+              if [ -z "$OPEN_ISSUE" ]; then
+                gh api "repos/ThresholdVC/.github/issues" --method POST \
+                  --field title="🔴 Security audit failing: $repo" \
+                  --field body="$(cat <<BODY
+Security audit has been failing for **$CONSECUTIVE consecutive runs** in [$repo](https://github.com/$repo/actions).
+
+**Next steps:**
+1. Check the latest run: https://github.com/$repo/actions
+2. Look at the failing step (install deps vs pip-audit/npm audit)
+3. Fix dependency conflicts in requirements.txt / package.json
+4. The auto-patch should handle pure CVE bumps automatically
+
+_Opened by weekly audit sweep. Will auto-close once audits pass._
+BODY
+)" \
+                  --field labels='["security","automated"]' 2>/dev/null
+                echo "Opened issue for $repo ($CONSECUTIVE failures)" >&2
+              fi
+
+            elif [ "$CONSECUTIVE" -eq 0 ] && [ -n "$CONCLUSIONS" ]; then
+              PASSING_LIST="$PASSING_LIST
+- $repo"
+
+              # Close any open issue for this repo (it's fixed)
+              OPEN_ISSUE=$(gh api "repos/ThresholdVC/.github/issues" \
+                --jq ".[] | select(.state==\"open\") | select(.title | test(\"$repo\")) | .number" \
+                2>/dev/null | head -1)
+              if [ -n "$OPEN_ISSUE" ]; then
+                gh api "repos/ThresholdVC/.github/issues/$OPEN_ISSUE" --method PATCH \
+                  --field state=closed \
+                  --field state_reason=completed 2>/dev/null
+                echo "Closed issue #$OPEN_ISSUE for $repo (passing now)" >&2
+              fi
+            fi
+          done
+
+          # Write summary
+          echo "### ✅ Passing" >> "$GITHUB_STEP_SUMMARY"
+          printf "$PASSING_LIST
+" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+
+          if [ -n "$FAILING_LIST" ]; then
+            echo "### ❌ Failing (3+ consecutive)" >> "$GITHUB_STEP_SUMMARY"
+            printf "$FAILING_LIST
+" >> "$GITHUB_STEP_SUMMARY"
+            echo "" >> "$GITHUB_STEP_SUMMARY"
+            echo "> Issues opened in ThresholdVC/.github — check the Issues tab." >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+          if [ -n "$NO_AUDIT_LIST" ]; then
+            echo "### ⚪ No audit workflow" >> "$GITHUB_STEP_SUMMARY"
+            printf "$NO_AUDIT_LIST
+" >> "$GITHUB_STEP_SUMMARY"
+          fi
