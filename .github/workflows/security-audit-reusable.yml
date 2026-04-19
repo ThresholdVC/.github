@@ -58,10 +58,15 @@ jobs:
         with:
           python-version: ${{ inputs.python_version }}
       - if: inputs.ecosystem == 'pip'
-        name: Install requirements (no resolver)
+        name: Install requirements (no resolver, PyPI only)
         run: |
           pip install pip-audit
-          pip install --no-deps -r ${{ inputs.requirements_path }}
+          # Filter out VCS (git+/hg+/svn+), URL, and local-path refs — pip-audit
+          # only scans PyPI packages, and private VCS deps fail auth in CI.
+          grep -vE '^\s*(git\+|hg\+|svn\+|bzr\+|https?://|file://|-e\s|\.\./|/)' \
+            "${{ inputs.requirements_path }}" > /tmp/reqs-pypi.txt || true
+          echo "Installing $(grep -c . /tmp/reqs-pypi.txt) PyPI packages (skipping VCS/URL refs)"
+          pip install --no-deps -r /tmp/reqs-pypi.txt
       - if: inputs.ecosystem == 'pip'
         name: Run pip-audit
         run: pip-audit --progress-spinner=off
