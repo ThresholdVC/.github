@@ -1,0 +1,92 @@
+name: Security Audit (Reusable)
+
+# Shared nightly CVE scanner called by per-repo workflows.
+# Usage (in caller repo):
+#
+#   jobs:
+#     audit:
+#       uses: ThresholdVC/.github/.github/workflows/security-audit-reusable.yml@main
+#       with:
+#         ecosystem: pip            # pip | npm | pnpm
+#         requirements_path: requirements.txt
+#         audit_level: moderate     # low | moderate | high | critical
+
+on:
+  workflow_call:
+    inputs:
+      ecosystem:
+        description: "Package ecosystem: pip | npm | pnpm"
+        required: true
+        type: string
+      requirements_path:
+        description: "Path to requirements file (pip only)"
+        required: false
+        default: requirements.txt
+        type: string
+      audit_level:
+        description: "Severity threshold for npm/pnpm audit"
+        required: false
+        default: moderate
+        type: string
+      node_version:
+        description: "Node version (npm/pnpm only)"
+        required: false
+        default: "20"
+        type: string
+      pnpm_version:
+        description: "pnpm version"
+        required: false
+        default: "9"
+        type: string
+      python_version:
+        description: "Python version (pip only)"
+        required: false
+        default: "3.11"
+        type: string
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # ---- pip ----
+      - if: inputs.ecosystem == 'pip'
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ inputs.python_version }}
+      - if: inputs.ecosystem == 'pip'
+        name: Install pip-audit
+        run: pip install pip-audit
+      - if: inputs.ecosystem == 'pip'
+        name: Run pip-audit (no resolver)
+        run: pip-audit --disable-pip -r ${{ inputs.requirements_path }}
+
+      # ---- npm ----
+      - if: inputs.ecosystem == 'npm'
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ inputs.node_version }}
+      - if: inputs.ecosystem == 'npm'
+        name: npm ci
+        run: npm ci
+      - if: inputs.ecosystem == 'npm'
+        name: npm audit
+        run: npm audit --audit-level=${{ inputs.audit_level }}
+
+      # ---- pnpm ----
+      - if: inputs.ecosystem == 'pnpm'
+        uses: pnpm/action-setup@v3
+        with:
+          version: ${{ inputs.pnpm_version }}
+      - if: inputs.ecosystem == 'pnpm'
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ inputs.node_version }}
+          cache: pnpm
+      - if: inputs.ecosystem == 'pnpm'
+        name: pnpm install
+        run: pnpm install --frozen-lockfile
+      - if: inputs.ecosystem == 'pnpm'
+        name: pnpm audit
+        run: pnpm audit --audit-level ${{ inputs.audit_level }}
