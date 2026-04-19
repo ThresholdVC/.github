@@ -60,7 +60,7 @@ jobs:
         run: pip install pip-audit
       - if: inputs.ecosystem == 'pip'
         name: Run pip-audit (no resolver)
-        run: pip-audit --disable-pip -r ${{ inputs.requirements_path }}
+        run: pip-audit --no-deps -r ${{ inputs.requirements_path }}
 
       # ---- npm ----
       - if: inputs.ecosystem == 'npm'
