@@ -51,6 +51,8 @@ jobs:
       - uses: actions/checkout@v4
 
       # ---- pip ----
+      # Audit each pinned package individually via pip-audit — no pip resolver,
+      # so conflicting pins in requirements.txt don't block CVE detection.
       - if: inputs.ecosystem == 'pip'
         uses: actions/setup-python@v5
         with:
@@ -59,8 +61,24 @@ jobs:
         name: Install pip-audit
         run: pip install pip-audit
       - if: inputs.ecosystem == 'pip'
-        name: Run pip-audit (no resolver)
-        run: pip-audit --no-deps -r ${{ inputs.requirements_path }}
+        name: Audit pinned packages
+        run: |
+          set -euo pipefail
+          REQ="${{ inputs.requirements_path }}"
+          FAIL=0
+          # Extract pinned packages (name==version), skip comments/blank/extras.
+          grep -E '^[A-Za-z0-9_.\[\]-]+==[A-Za-z0-9_.+-]+' "$REQ" \
+            | sed -E 's/\s*(#.*)?$//' \
+            | sed -E 's/\[[^]]*\]//' \
+            | sort -u > /tmp/pins.txt
+          echo "Auditing $(wc -l < /tmp/pins.txt) pinned packages from $REQ"
+          while IFS= read -r spec; do
+            [ -z "$spec" ] && continue
+            if ! pip-audit --progress-spinner=off "$spec" 2>&1; then
+              FAIL=1
+            fi
+          done < /tmp/pins.txt
+          exit $FAIL
 
       # ---- npm ----
       - if: inputs.ecosystem == 'npm'
